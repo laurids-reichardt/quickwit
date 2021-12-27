@@ -37,6 +37,7 @@ use quickwit_config::SourceConfig;
 use quickwit_index_config::tag_pruning::TagFilterAst;
 use tracing::{debug, error, info, warn};
 
+use crate::checkpoint::Checkpoint;
 use crate::metastore::CheckpointDelta;
 use crate::postgresql::model::SELECT_SPLITS_FOR_INDEX;
 use crate::postgresql::schema::splits;
@@ -729,6 +730,20 @@ impl Metastore for PostgresqlMetastore {
         let conn = self.get_conn()?;
         let index_metadata = self.index_metadata_inner(&conn, index_id)?;
         Ok(index_metadata)
+    }
+
+    async fn set_checkpoint(&self, index_id: &str, checkpoint: Checkpoint) -> MetastoreResult<()> {
+        let conn = self.get_conn()?;
+        conn.transaction::<_, MetastoreError, _>(|| {
+            let mut index_metadata = self.index_metadata_inner(&conn, index_id)?;
+            if index_metadata.checkpoint == checkpoint {
+                return Ok(());
+            }
+            index_metadata.checkpoint = checkpoint;
+            self.update_index(&conn, index_metadata)?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
     async fn add_source(&self, index_id: &str, source: SourceConfig) -> MetastoreResult<()> {

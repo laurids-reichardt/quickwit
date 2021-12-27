@@ -29,7 +29,7 @@ pub use index_metadata::IndexMetadata;
 use quickwit_config::SourceConfig;
 use quickwit_index_config::tag_pruning::TagFilterAst;
 
-use crate::checkpoint::CheckpointDelta;
+use crate::checkpoint::{Checkpoint, CheckpointDelta};
 use crate::{MetastoreResult, Split, SplitMetadata, SplitState};
 
 /// Metastore meant to manage Quickwit's indexes and their splits.
@@ -152,6 +152,14 @@ pub trait Metastore: Send + Sync + 'static {
     /// storage.
     async fn delete_splits<'a>(&self, index_id: &str, split_ids: &[&'a str])
         -> MetastoreResult<()>;
+
+    /// Clears the index's checkpoint.
+    async fn reset_checkpoint(&self, index_id: &str) -> MetastoreResult<()> {
+        self.set_checkpoint(index_id, Checkpoint::default()).await
+    }
+
+    /// Sets the index's checkpoint. Ingestion will resume from the newly set checkpoint.
+    async fn set_checkpoint(&self, index_id: &str, checkpoint: Checkpoint) -> MetastoreResult<()>;
 
     /// Adds a new source. Fails with [`MetastoreError::SourceAlreadyExists`] if a source with the
     /// same ID is already defined for the index.

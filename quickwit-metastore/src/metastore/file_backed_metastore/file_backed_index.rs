@@ -30,7 +30,7 @@ use quickwit_config::SourceConfig;
 use quickwit_index_config::tag_pruning::TagFilterAst;
 use serde::{Deserialize, Serialize};
 
-use crate::checkpoint::CheckpointDelta;
+use crate::checkpoint::{Checkpoint, CheckpointDelta};
 use crate::{IndexMetadata, MetastoreError, MetastoreResult, Split, SplitMetadata, SplitState};
 
 /// A `FileBackedIndex` object carries an index metadata and its split metadata.
@@ -372,11 +372,21 @@ impl FileBackedIndex {
         Ok(())
     }
 
+    pub(crate) fn set_checkpoint(&mut self, checkpoint: Checkpoint) -> MetastoreResult<bool> {
+        if self.metadata.checkpoint == checkpoint {
+            return Ok(false);
+        }
+        self.metadata.checkpoint = checkpoint;
+        Ok(true)
+    }
+
     pub(crate) fn add_source(&mut self, source: SourceConfig) -> MetastoreResult<bool> {
-        self.metadata.add_source(source).map(|_| true)
+        self.metadata.add_source(source)?;
+        Ok(true)
     }
 
     pub(crate) fn delete_source(&mut self, source_id: &str) -> MetastoreResult<bool> {
-        self.metadata.delete_source(source_id).map(|_| true)
+        self.metadata.delete_source(source_id)?;
+        Ok(true)
     }
 }

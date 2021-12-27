@@ -40,7 +40,7 @@ use tracing::error;
 use self::file_backed_index::FileBackedIndex;
 pub use self::file_backed_metastore_factory::FileBackedMetastoreFactory;
 use self::store_operations::{delete_index, fetch_index, index_exists, put_index};
-use crate::checkpoint::CheckpointDelta;
+use crate::checkpoint::{Checkpoint, CheckpointDelta};
 use crate::{
     IndexMetadata, Metastore, MetastoreError, MetastoreResult, Split, SplitMetadata, SplitState,
 };
@@ -344,6 +344,11 @@ impl Metastore for FileBackedMetastore {
             Ok(true)
         })
         .await
+    }
+
+    async fn set_checkpoint(&self, index_id: &str, checkpoint: Checkpoint) -> MetastoreResult<()> {
+        self.mutate(index_id, |index| index.set_checkpoint(checkpoint))
+            .await
     }
 
     async fn add_source(&self, index_id: &str, source: SourceConfig) -> MetastoreResult<()> {
