@@ -189,7 +189,7 @@ pub async fn root_search(
                 let leaf_request = jobs_to_leaf_request(
                     search_request,
                     &doc_mapper_str,
-                    &index_metadata.index_uri,
+                    index_metadata.index_uri.as_ref(),
                     client_jobs,
                 );
                 cluster_client.leaf_search(leaf_request, client)

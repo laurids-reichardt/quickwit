@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use quickwit_common::uri::{Protocol, Uri};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
@@ -114,8 +115,8 @@ impl Storage for RamStorage {
         Ok(payload_bytes)
     }
 
-    fn uri(&self) -> String {
-        "ram://".to_string()
+    fn uri(&self) -> &Uri {
+        &Uri::new("ram://".to_string())
     }
 
     async fn file_num_bytes(&self, path: &Path) -> StorageResult<u64> {
@@ -164,24 +165,16 @@ impl Default for RamStorageFactory {
 }
 
 impl StorageFactory for RamStorageFactory {
-    fn protocol(&self) -> String {
-        "ram".to_string()
+    fn protocol(&self) -> Protocol {
+        Protocol::Ram
     }
 
-    fn resolve(&self, uri: &str) -> crate::StorageResult<Arc<dyn Storage>> {
-        if !uri.starts_with("ram://") {
-            let err_msg = anyhow::anyhow!(
-                "{:?} is an invalid ram storage uri. Only ram:// is accepted.",
-                uri
-            );
-            return Err(StorageErrorKind::DoesNotExist.with_error(err_msg));
+    fn resolve(&self, uri: &Uri) -> crate::StorageResult<Arc<dyn Storage>> {
+        if !uri.protocol().is_ram() {
+            let error = anyhow::anyhow!("");
+            return Err(StorageErrorKind::DoesNotExist.with_error(error));
         }
-
-        let prefix = uri.split("://").nth(1).ok_or_else(|| {
-            StorageErrorKind::DoesNotExist
-                .with_error(anyhow::anyhow!("Invalid prefix path: {}", uri))
-        })?;
-
+        let prefix = "prefix";
         Ok(add_prefix_to_storage(self.ram_storage.clone(), prefix))
     }
 }

@@ -384,7 +384,7 @@ async fn describe_split_cli(args: DescribeSplitArgs) -> anyhow::Result<()> {
         .resolve(&quickwit_config.metastore_uri())
         .await?;
     let index_metadata = metastore.index_metadata(&args.index_id).await?;
-    let index_storage = storage_uri_resolver.resolve(&index_metadata.index_uri)?;
+    let index_storage = storage_uri_resolver.resolve(index_metadata.index_uri.as_ref())?;
 
     let split_metadata = metastore
         .list_all_splits(&args.index_id)
@@ -447,7 +447,7 @@ async fn extract_split_cli(args: ExtractSplitArgs) -> anyhow::Result<()> {
         .resolve(&quickwit_config.metastore_uri())
         .await?;
     let index_metadata = metastore.index_metadata(&args.index_id).await?;
-    let index_storage = storage_uri_resolver.resolve(&index_metadata.index_uri)?;
+    let index_storage = storage_uri_resolver.resolve(index_metadata.index_uri.as_ref())?;
     let split_file = PathBuf::from(format!("{}.split", args.split_id));
     let split_data = index_storage.get_all(split_file.as_path()).await?;
     let (_hotcache_bytes, bundle_storage) = BundleStorage::open_from_split_data_with_owned_bytes(

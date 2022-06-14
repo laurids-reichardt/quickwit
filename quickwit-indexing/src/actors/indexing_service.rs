@@ -210,7 +210,9 @@ impl IndexingService {
                 source_id: pipeline_id.source_id.clone(),
             });
         }
-        let storage = self.storage_resolver.resolve(&index_metadata.index_uri)?;
+        let storage = self
+            .storage_resolver
+            .resolve(index_metadata.index_uri.as_ref())?;
         let pipeline_params = IndexingPipelineParams::try_new(
             index_metadata,
             source,

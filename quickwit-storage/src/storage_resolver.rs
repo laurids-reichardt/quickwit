@@ -22,6 +22,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
+use quickwit_common::uri::{Protocol, Uri};
 
 use crate::local_file_storage::LocalFileStorageFactory;
 use crate::ram_storage::RamStorageFactory;
@@ -43,21 +44,21 @@ pub fn quickwit_storage_uri_resolver() -> &'static StorageUriResolver {
 #[cfg_attr(any(test, feature = "testsuite"), mockall::automock)]
 pub trait StorageFactory: Send + Sync + 'static {
     /// Returns the protocol this URI resolver is serving.
-    fn protocol(&self) -> String;
+    fn protocol(&self) -> Protocol;
     /// Given an URI, returns a [`Storage`] object.
-    fn resolve(&self, uri: &str) -> crate::StorageResult<Arc<dyn Storage>>;
+    fn resolve(&self, uri: &Uri) -> crate::StorageResult<Arc<dyn Storage>>;
 }
 
 /// Resolves an URI by dispatching it to the right [`StorageFactory`]
 /// based on its protocol.
 #[derive(Clone)]
 pub struct StorageUriResolver {
-    per_protocol_resolver: Arc<HashMap<String, Arc<dyn StorageFactory>>>,
+    per_protocol_resolver: Arc<HashMap<Protocol, Arc<dyn StorageFactory>>>,
 }
 
 #[derive(Default)]
 pub struct StorageUriResolverBuilder {
-    per_protocol_resolver: HashMap<String, Arc<dyn StorageFactory>>,
+    per_protocol_resolver: HashMap<Protocol, Arc<dyn StorageFactory>>,
 }
 
 impl StorageUriResolverBuilder {
@@ -96,14 +97,9 @@ impl StorageUriResolver {
     }
 
     /// Resolves the given URI.
-    pub fn resolve(&self, uri: &str) -> Result<Arc<dyn Storage>, StorageResolverError> {
-        let protocol = uri
-            .split("://")
-            .next()
-            .ok_or_else(|| StorageResolverError::InvalidUri {
-                message: format!("Protocol not found in storage uri: {}", uri),
-            })?;
-        let resolver = self.per_protocol_resolver.get(protocol).ok_or_else(|| {
+    pub fn resolve(&self, uri: &Uri) -> Result<Arc<dyn Storage>, StorageResolverError> {
+        let protocol = uri.protocol();
+        let resolver = self.per_protocol_resolver.get(&protocol).ok_or_else(|| {
             StorageResolverError::ProtocolUnsupported {
                 protocol: protocol.to_string(),
             }
@@ -113,7 +109,7 @@ impl StorageUriResolver {
                 kind: storage_error.kind(),
                 message: storage_error
                     .source()
-                    .map(|err| format!("{}", err))
+                    .map(|err| format!("{:?}", err))
                     .unwrap_or_else(String::new),
             }
         })?;

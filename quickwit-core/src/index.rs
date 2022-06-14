@@ -112,7 +112,7 @@ impl IndexService {
         };
         let index_metadata = IndexMetadata {
             index_id,
-            index_uri: index_uri.into_string(),
+            index_uri,
             checkpoint: Default::default(),
             sources: index_config.sources(),
             doc_mapping: index_config.doc_mapping,
@@ -141,7 +141,7 @@ impl IndexService {
         dry_run: bool,
     ) -> Result<Vec<FileEntry>, IndexServiceError> {
         let index_uri = self.metastore.index_metadata(index_id).await?.index_uri;
-        let storage = self.storage_resolver.resolve(&index_uri)?;
+        let storage = self.storage_resolver.resolve(index_uri.as_ref())?;
 
         if dry_run {
             let all_splits = self
@@ -209,7 +209,7 @@ impl IndexService {
         dry_run: bool,
     ) -> anyhow::Result<Vec<FileEntry>> {
         let index_uri = self.metastore.index_metadata(index_id).await?.index_uri;
-        let storage = self.storage_resolver.resolve(&index_uri)?;
+        let storage = self.storage_resolver.resolve(index_uri.as_ref())?;
         let split_store = IndexingSplitStore::create_with_no_local_store(storage);
 
         let deleted_entries = run_garbage_collect(
@@ -238,7 +238,9 @@ impl IndexService {
     /// * `storage_resolver` - A storage resolver object to access the storage.
     pub async fn reset_index(&self, index_id: &str) -> anyhow::Result<()> {
         let index_metadata = self.metastore.index_metadata(index_id).await?;
-        let storage = self.storage_resolver.resolve(&index_metadata.index_uri)?;
+        let storage = self
+            .storage_resolver
+            .resolve(index_metadata.index_uri.as_ref())?;
         let splits = self.metastore.list_all_splits(index_id).await?;
         let split_ids: Vec<&str> = splits.iter().map(|split| split.split_id()).collect();
         self.metastore

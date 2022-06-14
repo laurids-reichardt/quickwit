@@ -48,7 +48,7 @@ use quickwit_indexing::start_indexer_service;
 use quickwit_ingest_api::{init_ingest_api, IngestApiService};
 use quickwit_metastore::{quickwit_metastore_uri_resolver, Metastore};
 use quickwit_search::{start_searcher_service, SearchService};
-use quickwit_storage::quickwit_storage_uri_resolver;
+use quickwit_storage::{quickwit_storage_uri_resolver, StorageFactory};
 use warp::{Filter, Rejection};
 
 pub use crate::args::ServeArgs;
@@ -171,21 +171,24 @@ async fn check_is_configured_for_cluster(
     if config.peer_seeds.is_empty() {
         return Ok(());
     }
-
-    let metastore_uri = Uri::try_new(&metastore.uri())?;
-    if metastore_uri.protocol() == FILE_PROTOCOL || metastore_uri.protocol() == S3_PROTOCOL {
+    if metastore.uri().protocol().is_file() || metastore.uri().protocol().is_s3() {
         anyhow::bail!(
-            "Cluster feature cannot be used in conjunction with a file backed metastore."
+            "Quickwit cannot run in cluster mode with a file-backed metastore. Please, use a \
+             PostgreSQL metastore instead."
         );
     }
-
-    for index_metadata in metastore.list_indexes_metadatas().await? {
-        let index_uri = Uri::try_new(&index_metadata.index_uri)?;
-        if index_uri.protocol() == FILE_PROTOCOL {
-            anyhow::bail!(
-                "Quickwit cluster feature cannot be used in conjunction with a file storage."
-            );
-        }
+    if let Some(index_metadata) = metastore
+        .list_indexes_metadatas()
+        .await?
+        .iter()
+        .find(|im| im.index_uri.protocol().is_file())
+    {
+        anyhow::bail!(
+            "Quickwit cannot run in cluster mode with an index whose data is stored on a local \
+             file system. Index URI for index `{}` is `{}`.",
+            index_metadata.index_id,
+            index_uri
+        );
     }
     Ok(())
 }

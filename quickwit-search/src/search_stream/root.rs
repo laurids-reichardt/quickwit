@@ -72,7 +72,7 @@ pub async fn root_search_stream(
         let leaf_request: LeafSearchStreamRequest = jobs_to_leaf_request(
             &search_stream_request,
             &doc_mapper_str,
-            &index_metadata.index_uri,
+            index_metadata.index_uri.as_ref(),
             client_jobs,
         );
         let leaf_stream = cluster_client

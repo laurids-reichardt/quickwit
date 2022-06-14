@@ -21,19 +21,65 @@ use std::env;
 use std::ffi::OsStr;
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{bail, Context};
 use serde::{Serialize, Serializer};
 
-/// Default file protocol `file://`
-pub const FILE_PROTOCOL: &str = "file";
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub enum Protocol {
+    File,
+    PostgreSQL,
+    Ram,
+    S3,
+}
 
-/// S3 protocol `s3://`
-pub const S3_PROTOCOL: &str = "s3";
+impl Protocol {
+    pub fn as_str(&self) -> &str {
+        match &self {
+            Protocol::File => "file",
+            Protocol::PostgreSQL => "postgresql",
+            Protocol::Ram => "ram",
+            Protocol::S3 => "s3",
+        }
+    }
 
-const POSTGRES_PROTOCOL: &str = "postgres";
+    pub fn is_file(&self) -> bool {
+        matches!(&self, Protocol::File)
+    }
 
-const POSTGRESQL_PROTOCOL: &str = "postgresql";
+    pub fn is_postgresql(&self) -> bool {
+        matches!(&self, Protocol::PostgreSQL)
+    }
+
+    pub fn is_ram(&self) -> bool {
+        matches!(&self, Protocol::Ram)
+    }
+
+    pub fn is_s3(&self) -> bool {
+        matches!(&self, Protocol::S3)
+    }
+}
+
+impl Display for Protocol {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "{}", self.as_str())
+    }
+}
+
+impl FromStr for Protocol {
+    type Err = anyhow::Error;
+
+    fn from_str(protocol: &str) -> anyhow::Result<Self> {
+        match protocol {
+            "file" => Ok(Protocol::File),
+            "posgres" | "posgresql" => Ok(Protocol::PostgreSQL),
+            "ram" => Ok(Protocol::Ram),
+            "s3" => Ok(Protocol::S3),
+            _ => bail!("Unknown URI protocol `{}`.", protocol),
+        }
+    }
+}
 
 const PROTOCOL_SEPARATOR: &str = "://";
 
@@ -75,10 +121,10 @@ impl Uri {
             bail!("URI is empty.");
         }
         let (protocol, mut path) = match uri.split_once(PROTOCOL_SEPARATOR) {
-            None => (FILE_PROTOCOL, uri.to_string()),
+            None => (Protocol::File.as_str(), uri.to_string()),
             Some((protocol, path)) => (protocol, path.to_string()),
         };
-        if protocol == FILE_PROTOCOL {
+        if protocol == Protocol::File.as_str() {
             if path.starts_with('~') {
                 // We only accept `~` (alias to the home directory) and `~/path/to/something`.
                 // If there is something following the `~` that is not `/`, we bail out.
@@ -133,18 +179,26 @@ impl Uri {
     }
 
     /// Returns the protocol of the URI.
-    pub fn protocol(&self) -> &str {
-        &self.uri[..self.protocol_idx]
+    pub fn protocol(&self) -> Protocol {
+        Protocol::from_str(&self.uri[..self.protocol_idx]).expect("")
     }
 
     /// Returns the file path of the URI.
     /// Applies only to `file://` URIs.
     pub fn filepath(&self) -> Option<&Path> {
-        if self.protocol() == FILE_PROTOCOL {
+        if self.protocol().is_file() {
             self.uri.strip_prefix("file://").map(Path::new)
         } else {
             None
         }
+    }
+
+    pub fn parent(&self) -> Option<&Uri> {
+        unimplemented!()
+    }
+
+    pub fn file_name(&self) -> Option<&Path> {
+        unimplemented!()
     }
 
     /// Consumes the [`Uri`] struct and returns the normalized URI as a string.
@@ -154,21 +208,21 @@ impl Uri {
 
     /// Creates a new [`Uri`] with `path` adjoined to `self`.
     /// Fails if `path` is absolute.
-    pub fn join(&self, path: &str) -> anyhow::Result<Self> {
-        if Path::new(path).is_absolute() {
+    pub fn join<P: AsRef<Path> + std::fmt::Debug>(&self, path: P) -> anyhow::Result<Self> {
+        if path.as_ref().is_absolute() {
             bail!(
-                "Cannot join URI `{}` with absolute path `{}`.",
+                "Cannot join URI `{}` with absolute path `{:?}`.",
                 self.uri,
                 path
             );
         }
         let joined = match self.protocol() {
-            FILE_PROTOCOL => Path::new(&self.uri)
+            Protocol::File => Path::new(&self.uri)
                 .join(path)
                 .to_string_lossy()
                 .to_string(),
-            POSTGRES_PROTOCOL | POSTGRESQL_PROTOCOL => bail!(
-                "Cannot join PostgreSQL URI `{}` with path `{}`.",
+            Protocol::PostgreSQL => bail!(
+                "Cannot join PostgreSQL URI `{}` with path `{:?}`.",
                 self.uri,
                 path
             ),
@@ -176,7 +230,7 @@ impl Uri {
                 "{}{}{}",
                 self.uri,
                 if self.uri.ends_with('/') { "" } else { "/" },
-                path
+                path.as_ref().to_string_lossy()
             ),
         };
         Ok(Self {
@@ -213,6 +267,26 @@ impl Serialize for Uri {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer {
         serializer.serialize_str(&self.uri)
+    }
+}
+
+pub struct S3Uri {
+    uri: String,
+    protocol_idx: usize, 
+    bucket_idx: usize,
+}
+
+impl S3Uri {
+    fn into_uri(self) -> Uri {
+        Uri { uri: self.uri, protocol_idx: self.protocol_idx }
+    }
+
+    fn bucket(&self) -> &str {
+        &self.uri[self.protocol_idx..self.bucket_idx]
+    }
+
+    fn key(&self) -> &str {
+        &self.uri[self.bucket_idx + 1]
     }
 }
 

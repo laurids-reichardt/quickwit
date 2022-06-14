@@ -31,6 +31,7 @@ use once_cell::sync::OnceCell;
 use quickwit_aws::error::RusotoErrorWrapper;
 use quickwit_aws::get_http_client;
 use quickwit_aws::retry::{retry, Retry, RetryParams, Retryable};
+use quickwit_common::uri::Uri;
 use quickwit_common::{chunk_range, into_u64_range};
 use regex::Regex;
 use rusoto_core::credential::ProfileProvider;
@@ -223,18 +224,18 @@ impl S3CompatibleObjectStorage {
     }
 
     /// Creates an object storage given a region and an uri.
-    pub fn from_uri(uri: &str) -> crate::StorageResult<S3CompatibleObjectStorage> {
-        let region =
-            sniff_s3_region_and_cache().map_err(|err| StorageErrorKind::Service.with_error(err))?;
-        Self::from_uri_and_region(region, uri)
+    pub fn from_uri(uri: &Uri) -> crate::StorageResult<S3CompatibleObjectStorage> {
+        let region = sniff_s3_region_and_cache()
+            .map_err(|error| StorageErrorKind::Service.with_error(error))?;
+        Self::from_region_and_uri(region, uri)
     }
 
     /// Creates an object storage given a region and an uri.
-    pub fn from_uri_and_region(
+    pub fn from_region_and_uri(
         region: Region,
-        uri: &str,
+        uri: &Uri,
     ) -> crate::StorageResult<S3CompatibleObjectStorage> {
-        let (bucket, path) = parse_uri(uri).ok_or_else(|| {
+        let (bucket, path) = parse_s3_uri(uri).ok_or_else(|| {
             crate::StorageErrorKind::Io.with_error(anyhow::anyhow!("Invalid uri: {}", uri))
         })?;
         let s3_compatible_storage = S3CompatibleObjectStorage::new(region, &bucket)
@@ -267,14 +268,14 @@ impl S3CompatibleObjectStorage {
     }
 }
 
-pub fn parse_uri(uri: &str) -> Option<(String, PathBuf)> {
-    static URI_PTN: OnceCell<Regex> = OnceCell::new();
-    URI_PTN
+pub fn parse_s3_uri(uri: &Uri) -> Option<(String, PathBuf)> {
+    static S3_URI_PTN: OnceCell<Regex> = OnceCell::new();
+    S3_URI_PTN
         .get_or_init(|| {
             // s3://bucket/path/to/object
             Regex::new(r"s3(\+[^:]+)?://(?P<bucket>[^/]+)(/(?P<path>.+))?").unwrap()
         })
-        .captures(uri)
+        .captures(uri.as_str())
         .and_then(|cap| {
             cap.name("bucket").map(|bucket_match| {
                 (
@@ -305,6 +306,7 @@ impl Part {
 }
 
 const MD5_CHUNK_SIZE: usize = 1_000_000;
+
 async fn compute_md5<T: AsyncRead + std::marker::Unpin>(mut read: T) -> io::Result<md5::Digest> {
     let mut checksum = md5::Context::new();
     let mut buf = vec![0; MD5_CHUNK_SIZE];
@@ -725,8 +727,8 @@ impl Storage for S3CompatibleObjectStorage {
             Err(err) => Err(err.into()),
         }
     }
-    fn uri(&self) -> String {
-        format!("s3://{}/{}", self.bucket, self.prefix.to_string_lossy())
+    fn uri(&self) -> &Uri {
+        &self.uri
     }
 }
 
@@ -766,31 +768,31 @@ mod tests {
     use quickwit_common::chunk_range;
     use rusoto_core::Region;
 
-    use super::{compute_md5, parse_uri, region_from_str};
+    use super::{compute_md5, parse_s3_uri, region_from_str};
 
     #[test]
     fn test_parse_uri() {
         assert_eq!(
-            parse_uri("s3://bucket/path/to/object"),
+            parse_s3_uri("s3://bucket/path/to/object"),
             Some(("bucket".to_string(), PathBuf::from("path/to/object")))
         );
         assert_eq!(
-            parse_uri("s3://bucket/path"),
+            parse_s3_uri("s3://bucket/path"),
             Some(("bucket".to_string(), PathBuf::from("path")))
         );
         assert_eq!(
-            parse_uri("s3://bucket/path/to/object"),
+            parse_s3_uri("s3://bucket/path/to/object"),
             Some(("bucket".to_string(), PathBuf::from("path/to/object")))
         );
         assert_eq!(
-            parse_uri("s3://bucket/"),
+            parse_s3_uri("s3://bucket/"),
             Some(("bucket".to_string(), PathBuf::from("")))
         );
         assert_eq!(
-            parse_uri("s3://bucket"),
+            parse_s3_uri("s3://bucket"),
             Some(("bucket".to_string(), PathBuf::from("")))
         );
-        assert_eq!(parse_uri("mem://bucket/path/to"), None);
+        assert_eq!(parse_s3_uri("mem://bucket/path/to"), None);
     }
 
     #[test]

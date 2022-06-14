@@ -74,18 +74,10 @@ pub use crate::error::{StorageError, StorageErrorKind, StorageResolverError, Sto
 
 /// Loads an entire local or remote file into memory.
 pub async fn load_file(uri: &Uri) -> anyhow::Result<OwnedBytes> {
-    let path = Path::new(uri.as_ref());
-    let parent_uri = path
-        .parent()
-        .with_context(|| format!("`{}` is not a valid file URI.", uri))?
-        .to_str()
-        .with_context(|| format!("Failed to convert URI `{}` to str.", uri))?;
-
-    let storage = quickwit_storage_uri_resolver().resolve(parent_uri)?;
-    let file_name = path
-        .file_name()
-        .with_context(|| format!("`{}` is not a valid file URI.", uri))?;
-    let bytes = storage.get_all(Path::new(file_name)).await?;
+    let parent = uri.parent().ok_or_else(|| anyhow::anyhow!(""))?;
+    let storage = quickwit_storage_uri_resolver().resolve(parent)?;
+    let file_name = uri.file_name().ok_or_else(|| anyhow::anyhow!(""))?;
+    let bytes = storage.get_all(file_name).await?;
     Ok(bytes)
 }
 

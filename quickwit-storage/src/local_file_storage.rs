@@ -25,6 +25,7 @@ use std::{fmt, io};
 
 use async_trait::async_trait;
 use futures::future::{BoxFuture, FutureExt};
+use quickwit_common::uri::{Protocol, Uri};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::warn;
@@ -34,6 +35,7 @@ use crate::{OwnedBytes, Storage, StorageError, StorageErrorKind, StorageFactory,
 /// File system compatible storage implementation.
 #[derive(Clone)]
 pub struct LocalFileStorage {
+    uri: Uri,
     root: PathBuf,
 }
 
@@ -44,48 +46,14 @@ impl fmt::Debug for LocalFileStorage {
 }
 
 impl LocalFileStorage {
-    /// Creates a file storage instance given a uri
-    pub fn from_uri(uri: &str) -> StorageResult<LocalFileStorage> {
-        let root_pathbuf = Self::extract_root_path_from_uri(uri)?;
-        Ok(LocalFileStorage::from(root_pathbuf))
-    }
-
-    /// Validates if the provided uri is of the correct protocol & extracts the root path.
-    ///
-    /// Both scheme `file:///{path}` and `file://{path}` are accepted.
-    /// If uri starts with `file://`, a `/` is automatically added to ensure
-    /// `path` starts from root.
-    pub fn extract_root_path_from_uri(uri: &str) -> StorageResult<PathBuf> {
-        if !uri.starts_with("file://") {
-            let err_msg = anyhow::anyhow!(
-                "{:?} is an invalid file storage uri. Only file:// is accepted.",
-                uri
-            );
-            return Err(StorageErrorKind::DoesNotExist.with_error(err_msg));
-        }
-
-        let mut root_path = uri
-            .split("://")
-            .nth(1)
+    /// Creates a local file storage instance given a URI.
+    pub fn from_uri(uri: &Uri) -> StorageResult<Self> {
+        uri.filepath()
+            .map(|root| Self { uri: uri.clone(), root: root.to_path_buf()})
             .ok_or_else(|| {
-                StorageErrorKind::DoesNotExist
-                    .with_error(anyhow::anyhow!("Invalid root path: `{}`.", uri))
-            })?
-            .to_string();
-        if !root_path.starts_with('/') {
-            root_path.insert(0, '/');
-        }
-        let pathbuf = PathBuf::from(root_path);
-        if pathbuf
-            .iter()
-            .any(|segment| segment.to_string_lossy() == "..")
-        {
-            return Err(StorageErrorKind::Io.with_error(anyhow::anyhow!(
-                "Invalid uri, `..` is forbidden: `{}`.",
-                uri
-            )));
-        }
-        Ok(pathbuf)
+                let error = anyhow::anyhow!("");
+                StorageErrorKind::DoesNotExist.with_error(error)
+            })
     }
 
     /// Moves a file from a source to a destination.
@@ -152,12 +120,6 @@ fn missing_file_is_ok(io_result: io::Result<()>) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(io_err) if io_err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(io_err) => Err(io_err),
-    }
-}
-
-impl From<PathBuf> for LocalFileStorage {
-    fn from(root: PathBuf) -> LocalFileStorage {
-        LocalFileStorage { root }
     }
 }
 
@@ -228,8 +190,8 @@ impl Storage for LocalFileStorage {
         Ok(OwnedBytes::new(content_bytes))
     }
 
-    fn uri(&self) -> String {
-        format!("file://{}", self.root.to_string_lossy())
+    fn uri(&self) -> &Uri {
+        &self.uri
     }
 
     async fn file_num_bytes(&self, path: &Path) -> StorageResult<u64> {
@@ -261,11 +223,11 @@ impl Storage for LocalFileStorage {
 pub struct LocalFileStorageFactory {}
 
 impl StorageFactory for LocalFileStorageFactory {
-    fn protocol(&self) -> String {
-        "file".to_string()
+    fn protocol(&self) -> Protocol {
+        Protocol::File
     }
 
-    fn resolve(&self, uri: &str) -> StorageResult<Arc<dyn Storage>> {
+    fn resolve(&self, uri: &Uri) -> StorageResult<Arc<dyn Storage>> {
         let storage = LocalFileStorage::from_uri(uri)?;
         Ok(Arc::new(storage))
     }

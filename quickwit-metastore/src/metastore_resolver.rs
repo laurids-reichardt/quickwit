@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
+use quickwit_common::uri::Protocol;
 
 use crate::metastore::file_backed_metastore::FileBackedMetastoreFactory;
 #[cfg(feature = "postgres")]
@@ -32,6 +33,8 @@ use crate::{Metastore, MetastoreResolverError};
 #[cfg_attr(any(test, feature = "testsuite"), mockall::automock)]
 #[async_trait]
 pub trait MetastoreFactory: Send + Sync + 'static {
+    fn protocol(&self) -> Protocol;
+
     /// Given an URI, returns a [`Metastore`] object.
     async fn resolve(&self, uri: &str) -> Result<Arc<dyn Metastore>, MetastoreResolverError>;
 }
@@ -42,9 +45,9 @@ pub struct MetastoreUriResolverBuilder {
 }
 
 impl MetastoreUriResolverBuilder {
-    pub fn register<S: MetastoreFactory>(mut self, protocol: &str, resolver: S) -> Self {
+    pub fn register<S: MetastoreFactory>(mut self, resolver: S) -> Self {
         self.per_protocol_resolver
-            .insert(protocol.to_string(), Arc::new(resolver));
+            .insert(resolver.protocol(), Arc::new(resolver));
         self
     }
 
@@ -58,7 +61,7 @@ impl MetastoreUriResolverBuilder {
 /// Resolves an URI by dispatching it to the right [`MetastoreFactory`]
 /// based on its protocol.
 pub struct MetastoreUriResolver {
-    per_protocol_resolver: Arc<HashMap<String, Arc<dyn MetastoreFactory>>>,
+    per_protocol_resolver: Arc<HashMap<Protocol, Arc<dyn MetastoreFactory>>>,
 }
 
 /// Quickwit supported storage resolvers.
