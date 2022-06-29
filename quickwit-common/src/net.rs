@@ -18,16 +18,43 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 use std::fmt::Display;
-use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+use std::str::FromStr;
 
 use anyhow::{bail, Context};
+use serde::{Deserialize, Serialize, Serializer};
 use tokio::net::{lookup_host, ToSocketAddrs};
 
 /// Represents a host, i.e. an IP address (`127.0.0.1`) or a hostname (`localhost`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Host {
     Hostname(String),
     IpAddr(IpAddr),
+}
+
+impl Host {
+
+    pub fn is_unspecified(&self) -> bool {
+        match &self {
+            Host::Hostname(_) => false,
+            Host::IpAddr(ip_addr) => ip_addr.is_unspecified(),
+        }
+    }
+    pub fn with_port(&self, port: u16) -> HostAddr {
+        HostAddr {
+            host: self.clone(),
+            port,
+        }
+    }
+
+    pub async fn resolve(&self) -> anyhow::Result<IpAddr> {
+        match &self {
+            Host::Hostname(hostname) => get_socket_addr(&(hostname.as_str(), 0))
+                .await
+                .map(|socket_addr| socket_addr.ip()),
+            Host::IpAddr(ip_addr) => Ok(*ip_addr),
+        }
+    }
 }
 
 impl Display for Host {
@@ -36,6 +63,56 @@ impl Display for Host {
             Host::Hostname(hostname) => hostname.fmt(formatter),
             Host::IpAddr(ip_addr) => ip_addr.fmt(formatter),
         }
+    }
+}
+
+impl Serialize for Host {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        match self {
+            Host::Hostname(hostname) => hostname.serialize(serializer),
+            Host::IpAddr(ip_addr) => ip_addr.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Host {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        let host_str: String = Deserialize::deserialize(deserializer)?;
+        host_str.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<IpAddr> for Host {
+    fn from(ip_addr: IpAddr) -> Self {
+        Host::IpAddr(ip_addr)
+    }
+}
+
+impl From<Ipv4Addr> for Host {
+    fn from(ip_addr: Ipv4Addr) -> Self {
+        Host::IpAddr(IpAddr::V4(ip_addr))
+    }
+}
+
+impl From<Ipv6Addr> for Host {
+    fn from(ip_addr: Ipv6Addr) -> Self {
+        Host::IpAddr(IpAddr::V6(ip_addr))
+    }
+}
+
+impl FromStr for Host {
+    type Err = anyhow::Error;
+
+    fn from_str(host: &str) -> Result<Self, Self::Err> {
+        if let Ok(ip_addr) = host.parse::<IpAddr>() {
+            return Ok(Self::IpAddr(ip_addr));
+        }
+        if is_valid_hostname(host) {
+            return Ok(Self::Hostname(host.to_string()));
+        }
+        bail!("Failed to parse host: `{host}`.")
     }
 }
 
@@ -92,10 +169,10 @@ impl HostAddr {
 
     /// Resolves the host if necessary and returns a `SocketAddr`.
     pub async fn to_socket_addr(&self) -> anyhow::Result<SocketAddr> {
-        match &self.host {
-            Host::IpAddr(ip_addr) => Ok(SocketAddr::new(*ip_addr, self.port)),
-            Host::Hostname(hostname) => get_socket_addr(&(hostname.as_str(), self.port)).await,
-        }
+        self.host
+            .resolve()
+            .await
+            .map(|ip_addr| SocketAddr::new(ip_addr, self.port))
     }
 }
 
@@ -114,6 +191,10 @@ pub fn find_available_tcp_port() -> anyhow::Result<u16> {
     let listener = TcpListener::bind(socket)?;
     let port = listener.local_addr()?.port();
     Ok(port)
+}
+
+pub fn find_private_ip() -> anyhow::Result<IpAddr> {
+    unimplemented!()
 }
 
 /// Converts an object into a resolved `SocketAddr`.
@@ -160,7 +241,54 @@ fn is_valid_hostname(hostname: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv6Addr;
+
     use super::*;
+
+    #[test]
+    fn test_parse_host() {
+        assert_eq!("127.0.0.1".parse::<Host>().unwrap(), Host::from(Ipv4Addr::LOCALHOST));
+        assert_eq!(
+            "::1".parse::<Host>().unwrap(),
+            Host::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))
+        );
+        assert_eq!(
+            "localhost".parse::<Host>().unwrap(),
+            Host::Hostname("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn test_deserialize_host() {
+        assert_eq!(
+            serde_json::from_str::<Host>("\"127.0.0.1\"").unwrap(),
+            Host::from(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(
+            serde_json::from_str::<Host>("\"::1\"").unwrap(),
+            Host::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))
+        );
+        assert_eq!(
+            serde_json::from_str::<Host>("\"localhost\"").unwrap(),
+            Host::Hostname("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn test_serialize_host() {
+        assert_eq!(
+            serde_json::to_value(Host::from(Ipv4Addr::LOCALHOST)).unwrap(),
+            serde_json::Value::String("127.0.0.1".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(Host::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))).unwrap(),
+            serde_json::Value::String("::1".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(Host::Hostname("localhost".to_string())).unwrap(),
+            serde_json::Value::String("localhost".to_string())
+        );
+    }
 
     fn test_parse_addr_helper(addr: &str, expected_addr_opt: Option<&str>) {
         let addr_res = HostAddr::parse_with_default_port(addr, 1337);

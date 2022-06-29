@@ -20,12 +20,15 @@ version: 0
 # - for its gRPC service (TCP)
 # - for its Gossip cluster membership service (UDP)
 #
-# All three services are bound to the same host and different port.
+# All three services are bound to the same host and a different port. The host can be an IP address or a hostname.
 #
 # Default HTTP server host is `127.0.0.1` and default HTTP port is 7280.
 #
 # listen_address: 127.0.0.1
 # rest_listen_port: 7280
+#
+# IP address advertised by the node, i.e. the IP address that peer nodes should use to connect to the node for gossip and gRPC.
+# advertise_address: 192.168.0.42
 #
 # In order to join a cluster, one needs to specify a list of
 # seeds to connect to. If no port is specified, Quickwit will assume
@@ -33,7 +36,7 @@ version: 0
 # By default, the peer seed list is empty.
 #
 # peer_seeds:
-#   - quickwit-searcher-0.local:10000
+#   - quickwit-searcher-0.local
 #   - quickwit-searcher-1.local:10000
 #
 # Path to directory where temporary data (caches, intermediate indexing data structures)
