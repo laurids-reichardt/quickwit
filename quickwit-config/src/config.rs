@@ -330,8 +330,11 @@ impl QuickwitConfig {
             return Ok(advertise_addr.clone());
         }
         if self.listen_address.is_unspecified() {
-            let private_ip = find_private_ip()?;
-            return Ok(Host::from(private_ip));
+            if let Some((interface_name, private_ip)) = find_private_ip() {
+                info!(advertise_addr=%private_ip, interface_name=%interface_name, "");
+                return Ok(Host::from(private_ip));
+            }
+            bail!("");
         }
         Ok(self.listen_address.clone())
     }

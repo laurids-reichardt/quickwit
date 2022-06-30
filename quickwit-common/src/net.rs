@@ -22,6 +22,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::str::FromStr;
 
 use anyhow::{bail, Context};
+use itertools::Itertools;
+use once_cell::sync::OnceCell;
+use pnet::datalink;
+use pnet::ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize, Serializer};
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -33,13 +37,13 @@ pub enum Host {
 }
 
 impl Host {
-
     pub fn is_unspecified(&self) -> bool {
         match &self {
             Host::Hostname(_) => false,
             Host::IpAddr(ip_addr) => ip_addr.is_unspecified(),
         }
     }
+
     pub fn with_port(&self, port: u16) -> HostAddr {
         HostAddr {
             host: self.clone(),
@@ -193,8 +197,26 @@ pub fn find_available_tcp_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-pub fn find_private_ip() -> anyhow::Result<IpAddr> {
-    unimplemented!()
+pub fn find_private_ip() -> Option<(String, IpAddr)> {
+    datalink::interfaces()
+        .iter()
+        .filter(|interface| interface.is_up())
+        .flat_map(|interface| {
+            interface
+                .ips
+                .iter()
+                .filter(|ip_net| is_forwardable_ip(&ip_net.ip()) && is_private_ip(&ip_net.ip()))
+                .map(move |ip_net| (interface, ip_net))
+        })
+        .sorted_by_key(|(interface, ip_net)| {
+            (
+                ip_net.is_ipv6() as u8,
+                interface.is_dormant() as u8,
+                ip_net.prefix() as i16 * -1,
+            )
+        })
+        .next()
+        .map(|(interface, ip_net)| (interface.name.clone(), ip_net.ip()))
 }
 
 /// Converts an object into a resolved `SocketAddr`.
@@ -208,6 +230,48 @@ pub async fn get_socket_addr<T: ToSocketAddrs + std::fmt::Debug>(
         .ok_or_else(|| {
             anyhow::anyhow!("DNS resolution did not yield any record for hostname {addr:?}.")
         })
+}
+
+fn is_forwardable_ip(ip_addr: &IpAddr) -> bool {
+    static NON_FORWARDABLE_NETWORKS: OnceCell<Vec<IpNetwork>> = OnceCell::new();
+    NON_FORWARDABLE_NETWORKS
+        .get_or_init(|| {
+            [
+                "0.0.0.0/8",
+                "127.0.0.0/8",
+                "169.254.0.0/16",
+                "192.0.0.0/24",
+                "192.0.2.0/24",
+                "198.51.100.0/24",
+                "2001:10::/28",
+                "2001:db8::/32",
+                "203.0.113.0/24",
+                "240.0.0.0/4",
+                "255.255.255.255/32",
+                "::/128",
+                "::1/128",
+                "::ffff:0:0/96",
+                "fe80::/10",
+            ]
+            .iter()
+            .map(|network| network.parse().expect(""))
+            .collect()
+        })
+        .iter()
+        .all(|network| !network.contains(*ip_addr))
+}
+
+fn is_private_ip(ip_addr: &IpAddr) -> bool {
+    static PRIVATE_NETWORKS: OnceCell<Vec<IpNetwork>> = OnceCell::new();
+    PRIVATE_NETWORKS
+        .get_or_init(|| {
+            ["192.168.0.0/16", "172.16.0.0/12", "fc00::/7"]
+                .iter()
+                .map(|network| network.parse().expect(""))
+                .collect()
+        })
+        .iter()
+        .any(|network| network.contains(*ip_addr))
 }
 
 /// Returns whether a hostname is valid according to [IETF RFC 1123](https://tools.ietf.org/html/rfc1123).
@@ -247,7 +311,10 @@ mod tests {
 
     #[test]
     fn test_parse_host() {
-        assert_eq!("127.0.0.1".parse::<Host>().unwrap(), Host::from(Ipv4Addr::LOCALHOST));
+        assert_eq!(
+            "127.0.0.1".parse::<Host>().unwrap(),
+            Host::from(Ipv4Addr::LOCALHOST)
+        );
         assert_eq!(
             "::1".parse::<Host>().unwrap(),
             Host::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))
