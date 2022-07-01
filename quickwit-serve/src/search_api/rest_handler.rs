@@ -331,6 +331,16 @@ mod tests {
     use super::*;
     use crate::recover_fn;
 
+    fn search_handler(
+        mock_search_service: MockSearchService,
+    ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
+        let mock_search_service_in_arc = Arc::new(mock_search_service);
+        search_get_handler(mock_search_service_in_arc.clone())
+            .or(search_post_handler(mock_search_service_in_arc.clone()))
+            .or(search_stream_handler(mock_search_service_in_arc))
+            .recover(recover_fn)
+    }
+
     #[test]
     fn test_serialize_search_response() -> anyhow::Result<()> {
         let search_response = SearchResponseRest {
@@ -538,12 +548,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_rest_search_api_route_invalid_key() -> anyhow::Result<()> {
-        let mock_search_service = MockSearchService::new();
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
         let resp = warp::test::request()
             .path("/quickwit-demo-index/search?query=*&end_unix_timestamp=1450720000")
-            .reply(&rest_search_api_handler)
+            .reply(&search_handler(MockSearchService::new()))
             .await;
         assert_eq!(resp.status(), 400);
         let resp_json: serde_json::Value = serde_json::from_slice(resp.body())?;
@@ -566,8 +573,7 @@ mod tests {
                 ..Default::default()
             })
         });
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_api_handler = search_handler(mock_search_service);
         let resp = warp::test::request()
             .path("/quickwit-demo-index/search?query=*")
             .reply(&rest_search_api_handler)
@@ -594,8 +600,7 @@ mod tests {
                 },
             ))
             .returning(|_| Ok(Default::default()));
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_api_handler = search_handler(mock_search_service);
         assert_eq!(
             warp::test::request()
                 .path("/quickwit-demo-index/search?query=*&start_offset=5&max_hits=30")
@@ -615,8 +620,7 @@ mod tests {
                 index_id: "not-found-index".to_string(),
             })
         });
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_api_handler = search_handler(mock_search_service);
         assert_eq!(
             warp::test::request()
                 .path("/index-does-not-exist/search?query=myfield:test")
@@ -634,8 +638,7 @@ mod tests {
         mock_search_service
             .expect_root_search()
             .returning(|_| Err(SearchError::InternalError("ty".to_string())));
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_api_handler = search_handler(mock_search_service);
         assert_eq!(
             warp::test::request()
                 .path("/index-does-not-exist/search?query=myfield:test")
@@ -653,8 +656,7 @@ mod tests {
         mock_search_service
             .expect_root_search()
             .returning(|_| Err(SearchError::InvalidQuery("invalid query".to_string())));
-        let rest_search_api_handler =
-            super::search_get_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_api_handler = search_handler(mock_search_service);
         assert_eq!(
             warp::test::request()
                 .path("/my-index/search?query=myfield:test")
@@ -677,8 +679,7 @@ mod tests {
                     Ok(Bytes::from("second row")),
                 ])))
             });
-        let rest_search_stream_api_handler =
-            super::search_stream_handler(Arc::new(mock_search_service)).recover(recover_fn);
+        let rest_search_stream_api_handler = search_handler(mock_search_service);
         let response = warp::test::request()
             .path("/my-index/search/stream?query=obama&fast_field=external_id&output_format=csv")
             .reply(&rest_search_stream_api_handler)

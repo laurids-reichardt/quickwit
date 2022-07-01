@@ -95,6 +95,11 @@ fn get_status_with_error(rejection: Rejection) -> FormatError {
             code: ServiceErrorCode::NotFound,
             error: "Route not found".to_string(),
         }
+    } else if let Some(error) = rejection.find::<serde_qs::Error>() {
+        FormatError {
+            code: ServiceErrorCode::BadRequest,
+            error: error.to_string(),
+        }
     } else if let Some(error) = rejection.find::<warp::reject::UnsupportedMediaType>() {
         FormatError {
             code: ServiceErrorCode::UnsupportedMediaType,
@@ -132,11 +137,6 @@ fn get_status_with_error(rejection: Rejection) -> FormatError {
         }
     } else if let Some(error) = rejection.find::<warp::filters::body::BodyDeserializeError>() {
         // Happens when the request body could not be deserialized correctly.
-        FormatError {
-            code: ServiceErrorCode::BadRequest,
-            error: error.to_string(),
-        }
-    } else if let Some(error) = rejection.find::<serde_qs::Error>() {
         FormatError {
             code: ServiceErrorCode::BadRequest,
             error: error.to_string(),
