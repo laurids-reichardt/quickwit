@@ -43,9 +43,17 @@ impl Capacity {
 }
 struct NeedMutMemorySizedCache<K: Hash + Eq> {
     lru_cache: LruCache<K, OwnedBytes>,
-    num_bytes: usize,
+    num_items: usize,
+    num_bytes: u64,
     capacity: Capacity,
     cache_counters: &'static CacheCounters,
+}
+
+impl<K: Hash + Eq> Drop for NeedMutMemorySizedCache<K> {
+    fn drop(&mut self) {
+        self.cache_counters.num_items.sub(self.num_items as i64);
+        self.cache_counters.num_bytes.sub(self.num_bytes as i64);
+    }
 }
 
 impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
@@ -56,10 +64,25 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             // not the number of items in the cache.
             // Enforcing this limit is done in the `NeedMutCache` impl.
             lru_cache: LruCache::unbounded(),
+            num_items: 0,
             num_bytes: 0,
             capacity,
             cache_counters,
         }
+    }
+
+    pub fn record_item(&mut self, num_bytes: u64) {
+        self.num_items += 1;
+        self.num_bytes += num_bytes;
+        self.cache_counters.num_items.inc();
+        self.cache_counters.num_bytes.add(num_bytes as i64);
+    }
+
+    pub fn drop_item(&mut self, num_bytes: u64) {
+        self.num_items -= 1;
+        self.num_bytes -= num_bytes;
+        self.cache_counters.num_items.dec();
+        self.cache_counters.num_bytes.sub(num_bytes as i64);
     }
 
     pub fn get<Q>(&mut self, cache_key: &Q) -> Option<OwnedBytes>
@@ -93,17 +116,11 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             return;
         }
         if let Some(previous_data) = self.lru_cache.pop(&key) {
-            self.cache_counters.num_items.dec();
-            self.cache_counters
-                .num_bytes
-                .sub(previous_data.len() as i64);
-            self.num_bytes -= previous_data.len();
+            self.drop_item(previous_data.len() as u64);
         }
-        while self.capacity.exceeds_capacity(self.num_bytes + bytes.len()) {
+        while self.capacity.exceeds_capacity(self.num_bytes as usize + bytes.len()) {
             if let Some((_, bytes)) = self.lru_cache.pop_lru() {
-                self.cache_counters.num_items.inc();
-                self.cache_counters.num_bytes.sub(bytes.len() as i64);
-                self.num_bytes -= bytes.len();
+                self.drop_item(bytes.len() as u64);
             } else {
                 error!(
                     "Logical error. Even after removing all of the items in the cache the \
@@ -113,9 +130,7 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
                 return;
             }
         }
-        self.cache_counters.num_bytes.add(bytes.len() as i64);
-        self.cache_counters.num_items.inc();
-        self.num_bytes += bytes.len();
+        self.record_item(bytes.len() as u64);
         self.lru_cache.put(key, bytes);
     }
 }
