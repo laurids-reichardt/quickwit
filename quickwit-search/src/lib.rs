@@ -39,6 +39,7 @@ mod thread_pool;
 
 #[cfg(test)]
 mod tests;
+mod counters;
 
 /// Refer to this as `crate::Result<T>`.
 pub type Result<T> = std::result::Result<T, SearchError>;

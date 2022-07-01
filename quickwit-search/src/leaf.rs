@@ -362,6 +362,7 @@ pub async fn leaf_search(
             let index_storage_clone = index_storage.clone();
             async move {
                 let leaf_split_search_permit = get_leaf_search_split_semaphore().await;
+                crate::counters::COUNTERS.num_split_searches.inc();
                 leaf_search_single_split(
                     request,
                     index_storage_clone,
