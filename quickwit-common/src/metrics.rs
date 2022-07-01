@@ -17,7 +17,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-use prometheus::{Encoder, IntCounter, IntGauge, Opts, TextEncoder};
+use prometheus::{Encoder, Opts, TextEncoder};
+pub use prometheus::{IntCounter, IntGauge};
 
 pub fn new_counter(name: &str, description: &str) -> IntCounter {
     let counter =

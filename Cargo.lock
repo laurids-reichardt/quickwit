@@ -2923,7 +2923,6 @@ dependencies = [
  "mockall",
  "once_cell",
  "opentelemetry",
- "prometheus",
  "quickwit-actors",
  "quickwit-cluster",
  "quickwit-common",

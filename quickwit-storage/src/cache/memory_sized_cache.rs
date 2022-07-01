@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use lru::{KeyRef, LruCache};
 use tracing::{error, warn};
 
+use crate::counters::CacheCounters;
 use crate::OwnedBytes;
 
 #[derive(Clone, Copy, Debug)]
@@ -44,11 +45,12 @@ struct NeedMutMemorySizedCache<K: Hash + Eq> {
     lru_cache: LruCache<K, OwnedBytes>,
     num_bytes: usize,
     capacity: Capacity,
+    cache_counters: &'static CacheCounters,
 }
 
 impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
     /// Creates a new NeedMutSliceCache with the given capacity.
-    fn with_capacity(capacity: Capacity) -> Self {
+    fn with_capacity(capacity: Capacity, cache_counters: &'static CacheCounters) -> Self {
         NeedMutMemorySizedCache {
             // The limit will be decided by the amount of memory in the cache,
             // not the number of items in the cache.
@@ -56,6 +58,7 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             lru_cache: LruCache::unbounded(),
             num_bytes: 0,
             capacity,
+            cache_counters,
         }
     }
 
@@ -64,7 +67,16 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
         KeyRef<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.lru_cache.get(cache_key).cloned()
+        let item_opt = self.lru_cache.get(cache_key).cloned();
+        if let Some(item) = item_opt.as_ref() {
+            self.cache_counters.num_cache_hits_items.inc();
+            self.cache_counters
+                .num_cache_hits_bytes
+                .inc_by(item.len() as u64);
+        } else {
+            self.cache_counters.num_cache_miss_items.inc();
+        }
+        item_opt
     }
 
     /// Attempt to put the given amount of data in the cache.
@@ -81,10 +93,16 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             return;
         }
         if let Some(previous_data) = self.lru_cache.pop(&key) {
+            self.cache_counters.num_items.dec();
+            self.cache_counters
+                .num_bytes
+                .sub(previous_data.len() as i64);
             self.num_bytes -= previous_data.len();
         }
         while self.capacity.exceeds_capacity(self.num_bytes + bytes.len()) {
             if let Some((_, bytes)) = self.lru_cache.pop_lru() {
+                self.cache_counters.num_items.inc();
+                self.cache_counters.num_bytes.sub(bytes.len() as i64);
                 self.num_bytes -= bytes.len();
             } else {
                 error!(
@@ -95,6 +113,8 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
                 return;
             }
         }
+        self.cache_counters.num_bytes.add(bytes.len() as i64);
+        self.cache_counters.num_items.inc();
         self.num_bytes += bytes.len();
         self.lru_cache.put(key, bytes);
     }
@@ -107,18 +127,25 @@ pub struct MemorySizedCache<K: Hash + Eq> {
 
 impl<K: Hash + Eq> MemorySizedCache<K> {
     /// Creates an slice cache with the given capacity.
-    pub fn with_capacity_in_bytes(capacity_in_bytes: usize) -> Self {
+    pub fn with_capacity_in_bytes(
+        capacity_in_bytes: usize,
+        cache_counters: &'static CacheCounters,
+    ) -> Self {
         MemorySizedCache {
-            inner: Mutex::new(NeedMutMemorySizedCache::with_capacity(Capacity::InBytes(
-                capacity_in_bytes,
-            ))),
+            inner: Mutex::new(NeedMutMemorySizedCache::with_capacity(
+                Capacity::InBytes(capacity_in_bytes),
+                cache_counters,
+            )),
         }
     }
 
     /// Creates a slice cache that nevers removes any entry.
-    pub fn with_infinite_capacity() -> Self {
+    pub fn with_infinite_capacity(cache_counters: &'static CacheCounters) -> Self {
         MemorySizedCache {
-            inner: Mutex::new(NeedMutMemorySizedCache::with_capacity(Capacity::Unlimited)),
+            inner: Mutex::new(NeedMutMemorySizedCache::with_capacity(
+                Capacity::Unlimited,
+                cache_counters,
+            )),
         }
     }
 
@@ -143,10 +170,12 @@ impl<K: Hash + Eq> MemorySizedCache<K> {
 mod tests {
 
     use super::*;
+    use crate::counters::COUNTERS;
 
     #[test]
     fn test_cache_edge_condition() {
-        let cache = MemorySizedCache::<String>::with_capacity_in_bytes(5);
+        let cache =
+            MemorySizedCache::<String>::with_capacity_in_bytes(5, &COUNTERS.fast_field_cache);
         {
             let data = OwnedBytes::new(&b"abc"[..]);
             cache.put("3".to_string(), data);
@@ -179,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_cache_edge_unlimited_capacity() {
-        let cache = MemorySizedCache::with_infinite_capacity();
+        let cache = MemorySizedCache::with_infinite_capacity(&COUNTERS.fast_field_cache);
         {
             let data = OwnedBytes::new(&b"abc"[..]);
             cache.put("3".to_string(), data);
@@ -195,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_cache() {
-        let cache = MemorySizedCache::with_capacity_in_bytes(10_000);
+        let cache = MemorySizedCache::with_capacity_in_bytes(10_000, &COUNTERS.fast_field_cache);
         assert!(cache.get(&"hello.seg").is_none());
         let data = OwnedBytes::new(&b"werwer"[..]);
         cache.put("hello.seg", data);

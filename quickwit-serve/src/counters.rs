@@ -18,8 +18,7 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 use once_cell::sync::Lazy;
-use prometheus::IntCounter;
-use quickwit_common::metrics::new_counter;
+use quickwit_common::metrics::{new_counter, IntCounter};
 
 pub struct Counters {
     pub num_requests: IntCounter,
