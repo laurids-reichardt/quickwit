@@ -588,7 +588,7 @@ async fn download_all(byte_stream: &mut ByteStream, output: &mut Vec<u8>) -> io:
         let chunk = chunk_res?;
         output.extend(chunk.as_ref());
     }
-    // output.shrink_to_fit();
+    output.shrink_to_fit();
     Ok(())
 }
 

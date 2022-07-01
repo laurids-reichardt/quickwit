@@ -25,6 +25,7 @@ use opentelemetry::sdk::propagation::TraceContextPropagator;
 use quickwit_cli::cli::{build_cli, CliCommand};
 use quickwit_cli::QW_JAEGER_ENABLED_ENV_KEY;
 use quickwit_telemetry::payload::TelemetryEvent;
+use tikv_jemallocator::Jemalloc;
 use tracing::{info, Level};
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::prelude::*;
@@ -77,6 +78,9 @@ fn setup_logging_and_tracing(level: Level) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
