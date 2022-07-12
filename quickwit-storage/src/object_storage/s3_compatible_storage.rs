@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -54,7 +54,7 @@ const QUICKWIT_DEFAULT_REGION: Region = Region::UsEast1;
 #[instrument]
 fn sniff_s3_region() -> anyhow::Result<Region> {
     // Attempt to read region from environment variable and return an error if malformed.
-    if let Some(region) = region_from_env_variable()? {
+    if let Some(region) = region_from_env_variables()? {
         info!(region=?region, from="env-variable", "set-aws-region");
         return Ok(region);
     }
@@ -105,8 +105,17 @@ fn region_from_str(region_str: &str) -> anyhow::Result<Region> {
              http:// endpoint"
         );
     }
+
+    // For some storage provider like Cloudflare R2, we allow to to set the name of the region
+    // from `AWS_REGION` env variable.
+    let region_name = if let Ok(env_var) = std::env::var("AWS_REGION") {
+        env_var
+    } else {
+        "qw-custom-endpoint".to_string()
+    };
+
     Ok(Region::Custom {
-        name: "qw-custom-endpoint".to_string(),
+        name: region_name,
         endpoint: region_str.trim_end_matches('/').to_string(),
     })
 }
@@ -126,7 +135,7 @@ fn s3_region_env_var() -> Option<String> {
 }
 
 #[instrument]
-fn region_from_env_variable() -> anyhow::Result<Option<Region>> {
+fn region_from_env_variables() -> anyhow::Result<Option<Region>> {
     if let Some(region_str) = s3_region_env_var() {
         match region_from_str(&region_str) {
             Ok(region) => Ok(Some(region)),
@@ -341,6 +350,7 @@ impl S3CompatibleObjectStorage {
             content_length: Some(len as i64),
             ..Default::default()
         };
+        crate::STORAGE_METRICS.object_storage_put_parts.inc();
         self.s3_client.put_object(request).await?;
         Ok(())
     }
@@ -434,6 +444,7 @@ impl S3CompatibleObjectStorage {
             upload_id: upload_id.0,
             ..Default::default()
         };
+        crate::STORAGE_METRICS.object_storage_put_parts.inc();
         let upload_part_output = self
             .s3_client
             .upload_part(upload_part_req)
@@ -551,6 +562,7 @@ impl S3CompatibleObjectStorage {
     ) -> GetObjectRequest {
         let key = self.key(path);
         let range_str = range_opt.map(|range| format!("bytes={}-{}", range.start, range.end - 1));
+        crate::STORAGE_METRICS.object_storage_get_total.inc();
         GetObjectRequest {
             bucket: self.bucket.clone(),
             key,
@@ -584,10 +596,16 @@ impl S3CompatibleObjectStorage {
 
 async fn download_all(byte_stream: &mut ByteStream, output: &mut Vec<u8>) -> io::Result<()> {
     output.clear();
+    let object_storage_download_num_bytes = crate::STORAGE_METRICS
+        .object_storage_download_num_bytes
+        .clone();
     while let Some(chunk_res) = byte_stream.next().await {
         let chunk = chunk_res?;
+        object_storage_download_num_bytes.inc_by(chunk.len() as u64);
         output.extend(chunk.as_ref());
     }
+    // When calling `get_all`, the Vec capacity is not properly set.
+    output.shrink_to_fit();
     Ok(())
 }
 
@@ -609,6 +627,7 @@ impl Storage for S3CompatibleObjectStorage {
         path: &Path,
         payload: Box<dyn crate::PutPayload>,
     ) -> crate::StorageResult<()> {
+        crate::STORAGE_METRICS.object_storage_put_total.inc();
         let key = self.key(path);
         let total_len = payload.len();
         let part_num_bytes = self.multipart_policy.part_num_bytes(total_len);
@@ -658,6 +677,7 @@ impl Storage for S3CompatibleObjectStorage {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self, range), fields(range.start = range.start, range.end = range.end))]
     async fn get_slice(&self, path: &Path, range: Range<usize>) -> StorageResult<OwnedBytes> {
         self.get_to_vec(path, Some(range.clone()))
             .await
@@ -671,11 +691,17 @@ impl Storage for S3CompatibleObjectStorage {
             })
     }
 
+    #[instrument(level = "debug", skip(self), fields(fetched_bytes_len))]
     async fn get_all(&self, path: &Path) -> StorageResult<OwnedBytes> {
-        self.get_to_vec(path, None)
+        let payload = self
+            .get_to_vec(path, None)
             .await
             .map(OwnedBytes::new)
-            .map_err(|err| err.add_context(format!("Failed to fetch object: {}", self.uri(path))))
+            .map_err(|err| {
+                err.add_context(format!("Failed to fetch object: {}", self.uri(path)))
+            })?;
+        tracing::Span::current().record("fetched_bytes_len", &payload.len());
+        Ok(payload)
     }
 
     async fn file_num_bytes(&self, path: &Path) -> StorageResult<u64> {
@@ -807,6 +833,14 @@ mod tests {
             region_from_str("http://localhost:4566/").unwrap(),
             Region::Custom {
                 name: "qw-custom-endpoint".to_string(),
+                endpoint: "http://localhost:4566".to_string()
+            }
+        );
+        std::env::set_var("AWS_REGION", "my-custom-region");
+        assert_eq!(
+            region_from_str("http://localhost:4566/").unwrap(),
+            Region::Custom {
+                name: "my-custom-region".to_string(),
                 endpoint: "http://localhost:4566".to_string()
             }
         );
