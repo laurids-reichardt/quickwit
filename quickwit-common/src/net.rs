@@ -210,7 +210,7 @@ pub fn find_private_ip() -> Option<(String, IpAddr)> {
 #[allow(unused_variables)]
 fn is_dormant(interface: &NetworkInterface) -> bool {
     // "Dormant network interface" is a linux specific concept.
-    #[cfg(any(target_os = "macos", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         return interface.is_dormant();
     }
